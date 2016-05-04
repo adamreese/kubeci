@@ -5,9 +5,3 @@ machine:
 
   services:
     - docker
-
-dependencies:
-  cache_directories:
-    - "~/.kube"
-  override:
-    - chmod +x ./deploy/ensure-kubectl.sh && ./deploy/ensure-kubectl.sh
