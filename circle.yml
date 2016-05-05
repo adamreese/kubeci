@@ -1,7 +1,12 @@
 machine:
-
   environment:
     K8S_VERSION: $(curl -sS https://storage.googleapis.com/kubernetes-release/release/stable.txt)
-
   services:
     - docker
+dependencies:
+  pre:
+    - go env
+    - docker info
+test:
+  pre:
+    - ./scripts/local-cluster.sh up
