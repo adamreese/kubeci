@@ -1,12 +1,13 @@
 machine:
-  environment:
     K8S_VERSION: $(curl -sS https://storage.googleapis.com/kubernetes-release/release/stable.txt)
+    KUBECTL: ~/.kube/kubectl
   services:
     - docker
 dependencies:
   pre:
     - go env
     - docker info
+    - ./scripts/ensure-kubectl.sh
 test:
   pre:
     - ./scripts/local-cluster.sh up
