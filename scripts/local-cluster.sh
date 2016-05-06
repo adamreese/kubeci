@@ -157,6 +157,7 @@ start_kubernetes() {
     --name=etcd \
     --volume=etcd-data:/var/etcd/data \
     --net=host \
+    --restart=always \
     -d \
     quay.io/coreos/etcd:${ETCD_VERSION} \
       --listen-client-urls=http://0.0.0.0:4001 \
@@ -167,6 +168,7 @@ start_kubernetes() {
   docker run \
     --name=apiserver \
     --net=host \
+    --restart=always \
     -d \
     gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
       /hyperkube apiserver \
@@ -186,6 +188,7 @@ start_kubernetes() {
   docker run \
     --name=controller-manager \
     --net=host \
+    --restart=always \
     -d \
     gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
       /hyperkube controller-manager \
@@ -205,6 +208,7 @@ start_kubernetes() {
     --net=host \
     --pid=host \
     --privileged=true \
+    --restart=always \
     -d \
     gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
       /hyperkube kubelet \
@@ -220,6 +224,7 @@ start_kubernetes() {
   docker run \
     --name=scheduler \
     --net=host \
+    --restart=always \
     -d \
     gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
       /hyperkube scheduler \
@@ -231,6 +236,7 @@ start_kubernetes() {
     --name=proxy \
     --net=host \
     --privileged=true \
+    --restart=always \
     -d \
     gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
       /hyperkube proxy \
