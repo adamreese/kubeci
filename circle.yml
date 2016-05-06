@@ -1,12 +1,13 @@
 machine:
   environment:
-    KUBECTL: ~/.kube/kubectl
+    KUBECTL: ${HOME}/.kube/kubectl
   services:
     - docker
 dependencies:
   pre:
     - go env
     - docker info
+  override:
     - ./scripts/ensure-kubectl.sh
 test:
   pre:

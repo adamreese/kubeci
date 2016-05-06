@@ -11,6 +11,7 @@ cd "$HELM_ROOT"
 # Globals ----------------------------------------------------------------------
 
 KUBE_VERSION=${KUBE_VERSION:-}
+ETCD_VERSION=${ETCD_VERSION:-v2.3.2}
 KUBE_PORT=${KUBE_PORT:-8080}
 KUBE_CONTEXT=${KUBE_CONTEXT:-docker}
 KUBECTL=${KUBECTL:-kubectl}
@@ -138,7 +139,6 @@ set_master_ip() {
 
 # Start dockerized kubelet
 start_kubernetes() {
-  echo "Starting kubelet"
 
   # Enable dns
   if [[ "${ENABLE_CLUSTER_DNS}" = true ]]; then
@@ -150,6 +150,36 @@ start_kubernetes() {
 
   local start_time=$(date +%s)
 
+  docker create -v /var/etcd/data --name data_etcd quay.io/coreos/etcd:${ETCD_VERSION} /bin/true
+
+  echo "Starting etcd"
+  docker run \
+    --name=etcd \
+    --volumes-from=data_etcd \
+    --net=host \
+    -d \
+    gcr.io/google_containers/etcd:2.2.1 \
+      /usr/local/bin/etcd \
+      --listen-client-urls=http://0.0.0.0:4001 \
+      --advertise-client-urls=http://127.0.0.1:4001 \
+      --data-dir=/var/etcd/data >/dev/null
+
+  echo "Starting apiserver"
+  docker run \
+    --name=apiserver \
+    --net=host \
+    -d \
+    gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
+      /hyperkube apiserver \
+        --insecure-bind-address=0.0.0.0 \
+        --insecure-port=${KUBE_PORT} \
+        --service-cluster-ip-range=10.0.0.1/24 \
+        --etcd-servers=http://127.0.0.1:4001 \
+        --min-request-timeout=300 \
+        --allow-privileged=true \
+        --v=${LOG_LEVEL} >/dev/null
+
+  echo "Starting kubelet"
   docker run \
     --name=kubelet \
     --volume=/:/rootfs:ro \
@@ -164,11 +194,42 @@ start_kubernetes() {
     gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
       /hyperkube kubelet \
         --containerized \
-        --hostname-override="127.0.0.1" \
-        --api-servers=http://localhost:${KUBE_PORT} \
-        --config=/etc/kubernetes/manifests \
+        --hostname-override=127.0.0.1 \
+        --address=0.0.0.0 \
+        --api-servers=http://127.0.0.1:${KUBE_PORT} \
         --allow-privileged=true \
         ${dns_args} \
+        --v=${LOG_LEVEL} >/dev/null
+
+  echo "Starting controller-manager"
+  docker run \
+    --name=controller-manager \
+    --net=host \
+    -d \
+    gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
+      /hyperkube controller-manager \
+        --master=http://127.0.0.1:${KUBE_PORT} \
+        --min-resync-period=3m \
+        --v=${LOG_LEVEL} >/dev/null
+
+  echo "Starting scheduler"
+  docker run \
+    --name=scheduler \
+    --net=host \
+    -d \
+    gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
+      /hyperkube scheduler \
+        --master=http://127.0.0.1:${KUBE_PORT} \
+        --v=${LOG_LEVEL} >/dev/null
+
+  echo "Starting proxy"
+  docker run \
+    --name=proxy \
+    --net=host \
+    -d \
+    gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
+      /hyperkube proxy \
+        --master=http://127.0.0.1:${KUBE_PORT} \
         --v=${LOG_LEVEL} >/dev/null
 
   until $KUBECTL cluster-info &> /dev/null; do
@@ -177,14 +238,6 @@ start_kubernetes() {
 
   # Create kube-system namespace in kubernetes
   $KUBECTL create namespace kube-system >/dev/null
-
-  # We expect to have at least 3 running pods - etcd, master and kube-proxy.
-  local attempt=1
-  while (($(KUBECTL get pods --all-namespaces --no-headers 2>/dev/null | grep -c "Running") < 3)); do
-    echo -n "."
-    sleep $(( attempt++ ))
-  done
-  echo
 
   echo "Started master components in $(($(date +%s) - start_time)) seconds."
 }
@@ -287,8 +340,12 @@ kube_down() {
   $KUBECTL delete replicationcontrollers,services,pods,secrets --all --namespace=kube-system >/dev/null 2>&1 || :
   $KUBECTL delete namespace kube-system >/dev/null 2>&1 || :
 
-  echo "Stopping kubelet..."
-  delete_container kubelet
+  local -a components=(kubelet apiserver controller-manager scheduler proxy etcd data_etcd)
+
+  for c in "${components[@]}"; do
+    echo "Stopping ${c}"
+    delete_container "$c"
+  done
 
   echo "Stopping remaining kubernetes containers..."
   local kube_containers=($(docker ps -aqf "name=k8s_"))
