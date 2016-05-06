@@ -139,7 +139,7 @@ set_master_ip() {
 
 # Start dockerized kubelet
 start_kubernetes() {
-  echo "Starting master compoents"
+  echo "Starting master components"
 
   # Enable dns
   if [[ "${ENABLE_CLUSTER_DNS}" = true ]]; then
@@ -197,6 +197,7 @@ start_kubernetes() {
   docker run \
     --name=kubelet \
     --volume=/:/rootfs:ro \
+    --volume=/dev:/dev \
     --volume=/sys:/sys:ro \
     --volume=/var/lib/docker/:/var/lib/docker:rw \
     --volume=/var/lib/kubelet/:/var/lib/kubelet:rw \
