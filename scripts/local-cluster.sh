@@ -359,8 +359,11 @@ kube_up() {
   verify_prereqs
 
   set_master_ip
-  clean_volumes
-  setup_firewall
+
+  if [[ -z "${CI:-}" ]]; then
+    clean_volumes
+    setup_firewall
+  fi
 
   generate_kubeconfig
   start_kubernetes
