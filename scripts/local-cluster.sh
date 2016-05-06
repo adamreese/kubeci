@@ -300,7 +300,7 @@ generate_kubeconfig() {
 
 # Download kubectl
 download_kubectl() {
-  local output="bin/kubectl"
+  local output="./bin/kubectl"
 
   echo "Downloading kubectl binary to ${output}"
   kubectl_url="https://storage.googleapis.com/kubernetes-release/release/${KUBE_VERSION}/bin/${host_os}/${host_arch}/kubectl"
