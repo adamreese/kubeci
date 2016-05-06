@@ -244,7 +244,7 @@ start_kubernetes() {
 
 # Open kubernetes master api port.
 setup_firewall() {
-  [[ -n "${DOCKER_MACHINE_NAME:-}" ]] || return
+  [[ -z "${DOCKER_MACHINE_NAME:-}" ]] || return
 
   echo "Adding iptables hackery for docker-machine..."
 
