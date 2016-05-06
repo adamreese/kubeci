@@ -8,5 +8,10 @@ language: go
 go:
 - '1.6'
 
+before_install:
+  - wget "https://storage.googleapis.com/kubernetes-release/release/v1.2.3/bin/linux/amd64/kubectl"
+  - chmod +x kubectl
+  - sudo mv kubectl /usr/local/bin
+
 script:
   - ./scripts/local-cluster.sh up
