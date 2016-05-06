@@ -47,7 +47,7 @@ fetch_url() {
 
 # Check host platform and docker host
 verify_prereqs() {
-  echo "Verifying Prerequisites...."
+  echo "Verifying Prerequisites"
 
   case "$(uname -s)" in
     Darwin)
@@ -139,6 +139,7 @@ set_master_ip() {
 
 # Start dockerized kubelet
 start_kubernetes() {
+  echo "Starting master compoents"
 
   # Enable dns
   if [[ "${ENABLE_CLUSTER_DNS}" = true ]]; then
@@ -150,21 +151,19 @@ start_kubernetes() {
 
   local start_time=$(date +%s)
 
-  docker create -v /var/etcd/data --name data_etcd quay.io/coreos/etcd:${ETCD_VERSION} /bin/true
-
-  echo "Starting etcd"
+  echo "  etcd"
+  docker volume create --name etcd-data >/dev/null
   docker run \
     --name=etcd \
-    --volumes-from=data_etcd \
+    --volume=etcd-data:/var/etcd/data \
     --net=host \
     -d \
-    gcr.io/google_containers/etcd:2.2.1 \
-      /usr/local/bin/etcd \
+    quay.io/coreos/etcd:${ETCD_VERSION} \
       --listen-client-urls=http://0.0.0.0:4001 \
       --advertise-client-urls=http://127.0.0.1:4001 \
       --data-dir=/var/etcd/data >/dev/null
 
-  echo "Starting apiserver"
+  echo "  apiserver"
   docker run \
     --name=apiserver \
     --net=host \
@@ -179,7 +178,22 @@ start_kubernetes() {
         --allow-privileged=true \
         --v=${LOG_LEVEL} >/dev/null
 
-  echo "Starting kubelet"
+  until fetch_url "http://${KUBE_MASTER_IP}:${KUBE_PORT}/api/v1/pods" &>/dev/null; do
+    sleep 1
+  done
+
+  echo "  controller-manager"
+  docker run \
+    --name=controller-manager \
+    --net=host \
+    -d \
+    gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
+      /hyperkube controller-manager \
+        --master=http://127.0.0.1:${KUBE_PORT} \
+        --min-resync-period=3m \
+        --v=${LOG_LEVEL} >/dev/null
+
+  echo "  kubelet"
   docker run \
     --name=kubelet \
     --volume=/:/rootfs:ro \
@@ -201,18 +215,7 @@ start_kubernetes() {
         ${dns_args} \
         --v=${LOG_LEVEL} >/dev/null
 
-  echo "Starting controller-manager"
-  docker run \
-    --name=controller-manager \
-    --net=host \
-    -d \
-    gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
-      /hyperkube controller-manager \
-        --master=http://127.0.0.1:${KUBE_PORT} \
-        --min-resync-period=3m \
-        --v=${LOG_LEVEL} >/dev/null
-
-  echo "Starting scheduler"
+  echo "  scheduler"
   docker run \
     --name=scheduler \
     --net=host \
@@ -222,21 +225,18 @@ start_kubernetes() {
         --master=http://127.0.0.1:${KUBE_PORT} \
         --v=${LOG_LEVEL} >/dev/null
 
-  echo "Starting proxy"
+  echo "  proxy"
   docker run \
     --name=proxy \
     --net=host \
+    --privileged=true \
     -d \
     gcr.io/google_containers/hyperkube-amd64:${KUBE_VERSION} \
       /hyperkube proxy \
         --master=http://127.0.0.1:${KUBE_PORT} \
         --v=${LOG_LEVEL} >/dev/null
 
-  until $KUBECTL cluster-info &> /dev/null; do
-    sleep 1
-  done
-
-  # Create kube-system namespace in kubernetes
+  echo "Creating kube-system namespace"
   $KUBECTL create namespace kube-system >/dev/null
 
   echo "Started master components in $(($(date +%s) - start_time)) seconds."
@@ -244,16 +244,17 @@ start_kubernetes() {
 
 # Open kubernetes master api port.
 setup_firewall() {
-  [[ -z "${DOCKER_MACHINE_NAME:-}" ]] || return
+  if [[ -n "${DOCKER_MACHINE_NAME:-}" ]]; then
 
-  echo "Adding iptables hackery for docker-machine..."
+    echo "Adding iptables hackery for docker-machine"
 
-  local machine_ip
-  machine_ip=$(docker-machine ip "$DOCKER_MACHINE_NAME")
-  local iptables_rule="PREROUTING -p tcp -d ${machine_ip} --dport ${KUBE_PORT} -j DNAT --to-destination 127.0.0.1:${KUBE_PORT}"
+    local machine_ip
+    machine_ip=$(docker-machine ip "$DOCKER_MACHINE_NAME")
+    local iptables_rule="PREROUTING -p tcp -d ${machine_ip} --dport ${KUBE_PORT} -j DNAT --to-destination 127.0.0.1:${KUBE_PORT}"
 
-  if ! docker-machine ssh "${DOCKER_MACHINE_NAME}" "sudo /usr/local/sbin/iptables -t nat -C ${iptables_rule}" &> /dev/null; then
-    docker-machine ssh "${DOCKER_MACHINE_NAME}" "sudo /usr/local/sbin/iptables -t nat -I ${iptables_rule}"
+    if ! docker-machine ssh "${DOCKER_MACHINE_NAME}" "sudo /usr/local/sbin/iptables -t nat -C ${iptables_rule}" &> /dev/null; then
+      docker-machine ssh "${DOCKER_MACHINE_NAME}" "sudo /usr/local/sbin/iptables -t nat -I ${iptables_rule}"
+    fi
   fi
 }
 
@@ -263,18 +264,16 @@ create_kube_dns() {
 
   local start_time=$(date +%s)
 
-  echo "Setting up cluster dns..."
+  echo "Setting up cluster dns"
 
   $KUBECTL create -f ./scripts/cluster/skydns.yaml >/dev/null
 
-  echo "Waiting for cluster DNS to become available..."
+  echo "Waiting for cluster DNS to become available"
 
   local attempt=1
   until $KUBECTL get pods --no-headers --namespace kube-system --selector=k8s-app=kube-dns 2>/dev/null | grep "Running" &>/dev/null; do
-    echo -n "."
     sleep $(( attempt++ ))
   done
-  echo
   echo "Started DNS in $(($(date +%s) - start_time)) seconds."
 }
 
@@ -294,10 +293,9 @@ generate_kubeconfig() {
 
 # Download kubectl
 download_kubectl() {
-  echo "Downloading kubectl binary..."
+  local output="bin/kubectl"
 
-  local output="/usr/local/bin/kubectl"
-
+  echo "Downloading kubectl binary to ${output}"
   kubectl_url="https://storage.googleapis.com/kubernetes-release/release/${KUBE_VERSION}/bin/${host_os}/${host_arch}/kubectl"
   fetch_url "${kubectl_url}" > "${output}"
   chmod a+x "${output}"
@@ -335,27 +333,29 @@ delete_container() {
 
 # Delete master components and resources in kubernetes.
 kube_down() {
-  echo "Deleting all resources in kubernetes..."
+  echo "==> Destroying local kubernetes cluster"
   $KUBECTL delete replicationcontrollers,services,pods,secrets --all >/dev/null 2>&1 || :
   $KUBECTL delete replicationcontrollers,services,pods,secrets --all --namespace=kube-system >/dev/null 2>&1 || :
   $KUBECTL delete namespace kube-system >/dev/null 2>&1 || :
 
+  echo "Destroying master components"
   local -a components=(kubelet apiserver controller-manager scheduler proxy etcd data_etcd)
-
   for c in "${components[@]}"; do
-    echo "Stopping ${c}"
+    echo "  ${c}"
     delete_container "$c"
   done
 
-  echo "Stopping remaining kubernetes containers..."
+  echo "Destroying remaining kubernetes containers"
   local kube_containers=($(docker ps -aqf "name=k8s_"))
   if [[ "${#kube_containers[@]}" -gt 0 ]]; then
     delete_container "${kube_containers[@]}"
   fi
+  echo
 }
 
 # Start a kubernetes cluster in docker.
 kube_up() {
+  echo "==> Starting a local kubernetes cluster"
   verify_prereqs
 
   set_master_ip
@@ -366,6 +366,7 @@ kube_up() {
   start_kubernetes
   create_kube_dns
 
+  echo
   $KUBECTL cluster-info
 }
 
